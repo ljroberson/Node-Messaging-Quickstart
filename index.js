@@ -14,19 +14,55 @@ const freeclimbConfig = freeclimbSDK.createConfiguration({ baseServer, accountId
 const apiInstance = new freeclimbSDK.DefaultApi(freeclimbConfig);
 
 app.post('/incomingSms', (req, res) => {
-  const { from: userPhoneNumber } = req.body
+  console.log('POST /incomingSms - raw body:', req.body)
+  const { from: userPhoneNumber, text: incomingText } = req.body || {}
+  console.log('POST /incomingSms - parsed from:', userPhoneNumber, 'text:', incomingText)
+
   const messageRequest = {
     _from: fromNumber, // Your FreeClimb Number 
     to: userPhoneNumber,
     text: 'Hello, World!'
   }
+
+  console.log('POST /incomingSms - sending reply with request:', messageRequest)
   apiInstance.sendAnSmsMessage(messageRequest)
-    .then(() => {
+    .then(response => {
+      console.log('POST /incomingSms - reply sent, response:', response)
       res.sendStatus(200);
     })
     .catch(err => {
-      console.log(err)
-      res.sendStatus(500)
+      console.error('POST /incomingSms - error sending reply:', err)
+      if (err && err.body) console.error('POST /incomingSms - API error body:', err.body)
+      // return error details for debugging
+      res.status(500).json({ error: err.message || 'Failed to send reply', details: err.body || err })
+    })
+})
+
+// Outgoing SMS endpoint
+app.post('/send', (req, res) => {
+  const { to, text } = req.body
+
+  console.log('POST /send body:', req.body)
+
+  if (!to || !text) {
+    return res.status(400).json({ error: 'Missing to or text in request body' })
+  }
+  
+  const messageRequest = {
+    _from: fromNumber,
+    to,
+    text
+  }
+
+  console.log('Outgoing SMS request:', JSON.stringify(messageRequest, null, 2))
+
+  apiInstance.sendAnSmsMessage(messageRequest)
+    .then(() => {
+      res.json({ success: true, to, text })
+    })
+    .catch(err => {
+      console.error('Outgoing SMS failed:', err)
+      res.status(500).json({ error: err.message || 'Failed to send SMS' })
     })
 })
 
