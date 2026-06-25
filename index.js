@@ -1,4 +1,4 @@
-require('dotenv').config()
+require("./load-env")
 const express = require('express')
 const bodyParser = require('body-parser')
 const app = express()
@@ -6,26 +6,38 @@ app.use(bodyParser.json())
 const freeclimbSDK = require('@freeclimb/sdk')
 
 const port = process.env.PORT || 3000
-const accountId = process.env.ACCOUNT_ID
-const apiKey = process.env.API_KEY
-const fromNumber = process.env.FREECLIMB_NUMBER
-const baseServer = new freeclimbSDK.ServerConfiguration(process.env.API_SERVER || "https://www.freeclimb.com/apiserver")
-const freeclimbConfig = freeclimbSDK.createConfiguration({ baseServer, accountId, apiKey })
-const apiInstance = new freeclimbSDK.DefaultApi(freeclimbConfig);
+
+function getCredentials() {
+  require("./load-env").loadEnv()
+  return {
+    accountId: process.env.ACCOUNT_ID,
+    apiKey: process.env.API_KEY,
+    fromNumber: process.env.FREECLIMB_NUMBER,
+  }
+}
+
+function getApiInstance() {
+  const { accountId, apiKey } = getCredentials()
+  const baseServer = new freeclimbSDK.ServerConfiguration(process.env.API_SERVER || "https://www.freeclimb.com/apiserver")
+  const freeclimbConfig = freeclimbSDK.createConfiguration({ baseServer, accountId, apiKey })
+  return new freeclimbSDK.DefaultApi(freeclimbConfig)
+}
 
 app.post('/incomingSms', (req, res) => {
+  const { fromNumber } = getCredentials()
   console.log('POST /incomingSms - raw body:', req.body)
-  const { from: userPhoneNumber, text: incomingText } = req.body || {}
-  console.log('POST /incomingSms - parsed from:', userPhoneNumber, 'text:', incomingText)
+  const { from: userPhoneNumber, to: freeclimbNumber, text: incomingText } = req.body || {}
+  console.log('POST /incomingSms - parsed from:', userPhoneNumber, 'to:', freeclimbNumber, 'text:', incomingText)
+  console.log('POST /incomingSms - configured FREECLIMB_NUMBER:', fromNumber)
 
   const messageRequest = {
-    _from: fromNumber, // Your FreeClimb Number 
+    _from: fromNumber,
     to: userPhoneNumber,
     text: 'Hello, World!'
   }
 
   console.log('POST /incomingSms - sending reply with request:', messageRequest)
-  apiInstance.sendAnSmsMessage(messageRequest)
+  getApiInstance().sendAnSmsMessage(messageRequest)
     .then(response => {
       console.log('POST /incomingSms - reply sent, response:', response)
       res.sendStatus(200);
@@ -41,8 +53,10 @@ app.post('/incomingSms', (req, res) => {
 // Outgoing SMS endpoint
 app.post('/send', (req, res) => {
   const { to, text } = req.body
+  const { fromNumber } = getCredentials()
 
   console.log('POST /send body:', req.body)
+  console.log('POST /send configured FREECLIMB_NUMBER:', fromNumber)
 
   if (!to || !text) {
     return res.status(400).json({ error: 'Missing to or text in request body' })
@@ -56,13 +70,29 @@ app.post('/send', (req, res) => {
 
   console.log('Outgoing SMS request:', JSON.stringify(messageRequest, null, 2))
 
-  apiInstance.sendAnSmsMessage(messageRequest)
+  getApiInstance().sendAnSmsMessage(messageRequest)
     .then(() => {
       res.json({ success: true, to, text })
     })
     .catch(err => {
       console.error('Outgoing SMS failed:', err)
-      res.status(500).json({ error: err.message || 'Failed to send SMS' })
+      let details = null
+      if (typeof err?.body === 'string') {
+        try {
+          details = JSON.parse(err.body)
+        } catch {
+          details = err.body
+        }
+      } else if (err?.body) {
+        details = err.body
+      }
+
+      const message = details?.message || err.message || 'Failed to send SMS'
+      const hint = details?.code === 50
+        ? 'Check ACCOUNT_ID and API_KEY in .env — regenerate your API key in the FreeClimb dashboard if needed.'
+        : undefined
+
+      res.status(details?.code === 50 ? 401 : 500).json({ error: message, details, hint })
     })
 })
 
@@ -84,8 +114,9 @@ app.get("/ready", (req, res) => {
 
 app.listen(port, () => {
   const localUrl = `http://127.0.0.1:${port}`
+  const { accountId, apiKey, fromNumber } = getCredentials()
   console.log(`\nWelcome to FreeClimb!\n`);
-  if (typeof accountId === "undefined" || typeof apiKey === "undefined" || typeof fromNumber === "undefined") {
+  if (!accountId || !apiKey || !fromNumber) {
     console.log("ERROR: ENVIRONMENT VARIABLES ARE NOT SET. PLEASE SET ALL ENVIRONMMENT VARIABLES AND RETRY.");
     console.log(
       "Refer to https://www.npmjs.com/package/dotenv for further instructions.\n"
@@ -94,7 +125,8 @@ app.listen(port, () => {
   } else {
     const obfuscatedApiKey = apiKey.replace(/.(?=.{4,}$)/g, '*')
     console.log(`Your account id: ${accountId}`);
-    console.log(`Your api key is: ${obfuscatedApiKey}\n`);
+    console.log(`Your api key is: ${obfuscatedApiKey}`);
+    console.log(`Your FreeClimb number: ${fromNumber}\n`);
   }
 
   console.log(`Your web server is listening at: ${localUrl}`);

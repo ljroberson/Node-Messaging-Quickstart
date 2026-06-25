@@ -1,9 +1,14 @@
-import type { NextConfig } from "next";
+import path from "path"
+import { config } from "dotenv"
+import type { NextConfig } from "next"
+
+config({
+  path: path.resolve(__dirname, "../.env"),
+  override: true,
+})
 
 const nextConfig: NextConfig = {
-  allowedDevOrigins: [
-    'whoops-library-circular.ngrok-free.dev'
-  ],
-};
+  allowedDevOrigins: ["whoops-library-circular.ngrok-free.dev"],
+}
 
-export default nextConfig;
+export default nextConfig

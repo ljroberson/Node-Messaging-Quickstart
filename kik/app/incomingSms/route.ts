@@ -1,18 +1,12 @@
 import { NextResponse } from "next/server"
+import { getFreeClimbConfig } from "../lib/freeclimb"
+import {
+  addIncomingMessage,
+  loadIncomingMessages,
+  type StoredIncomingMessage,
+} from "../lib/incomingSmsStore"
 
 export const dynamic = "force-dynamic"
-
-type IncomingMessage = {
-  id: string
-  from: string
-  to: string
-  text: string
-  direction: string
-  receivedAt: string
-  rawBody: Record<string, unknown>
-}
-
-const messages: IncomingMessage[] = []
 
 const parseRequestBody = async (request: Request) => {
   const contentType = request.headers.get("content-type") || ""
@@ -21,7 +15,10 @@ const parseRequestBody = async (request: Request) => {
     return request.json()
   }
 
-  if (contentType.includes("application/x-www-form-urlencoded") || contentType.includes("multipart/form-data")) {
+  if (
+    contentType.includes("application/x-www-form-urlencoded") ||
+    contentType.includes("multipart/form-data")
+  ) {
     const form = await request.formData()
     return Object.fromEntries(form.entries())
   }
@@ -42,7 +39,7 @@ export async function POST(request: Request) {
   const body = (await parseRequestBody(request)) as Record<string, unknown>
   const text = toString(body.text ?? body.body ?? "")
 
-  const message: IncomingMessage = {
+  const message: StoredIncomingMessage = {
     id: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     from: toString(body.from),
     to: toString(body.to),
@@ -52,11 +49,31 @@ export async function POST(request: Request) {
     rawBody: body,
   }
 
-  messages.unshift(message)
+  const configured = getFreeClimbConfig()
+  if (configured?.fromNumber && message.to && message.to !== configured.fromNumber) {
+    console.warn(
+      `[incomingSms] Webhook delivered to ${message.to} but FREECLIMB_NUMBER is ${configured.fromNumber}. Update the SMS URL on the new number's application in FreeClimb.`,
+    )
+  }
+
+  console.log("[incomingSms] received:", {
+    from: message.from,
+    to: message.to,
+    text: message.text,
+    requestType: body.requestType,
+  })
+
+  const messages = addIncomingMessage(message)
 
   return NextResponse.json({ success: true, message, total: messages.length })
 }
 
 export async function GET() {
-  return NextResponse.json({ messages })
+  const messages = loadIncomingMessages()
+  const configured = getFreeClimbConfig()
+
+  return NextResponse.json({
+    messages,
+    configuredFreeclimbNumber: configured?.fromNumber ?? null,
+  })
 }

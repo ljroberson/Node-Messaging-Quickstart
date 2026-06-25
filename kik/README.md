@@ -16,6 +16,23 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
+> Note: This Next.js app proxies outgoing SMS requests to a separate local backend at `/send`. By default it uses `http://127.0.0.1:3002/send`, so you should run the root tutorial server on that port, or set `SEND_API_PROXY_URL` to the port your backend is actually using.
+>
+> Example:
+>
+> ```bash
+> cd ..
+> PORT=3002 yarn start
+> cd kik
+> SEND_API_PROXY_URL=http://127.0.0.1:3002 yarn dev
+> ```
+>
+> If you run the root tutorial server on port `3000`, start Next on a different port and set:
+>
+> ```bash
+> SEND_API_PROXY_URL=http://127.0.0.1:3000 yarn dev -- -p 3001
+> ```
+
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.

@@ -1,4 +1,4 @@
-require('dotenv').config()
+require("./load-env")
 const freeclimbSDK = require('@freeclimb/sdk')
 
 const accountId = process.env.ACCOUNT_ID

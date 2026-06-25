@@ -1,183 +1,264 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { ChatListPanel } from "./components/ChatListPanel"
+import { ChatView } from "./components/ChatView"
+import { ContactEditView } from "./components/ContactEditView"
+import { DevPanel } from "./components/DevPanel"
+import { DeviceFrame } from "./components/DeviceFrame"
+import { EditProfileView } from "./components/EditProfileView"
+import { EmptyChatPlaceholder } from "./components/EmptyChatPlaceholder"
+import { PhoneShell } from "./components/PhoneShell"
+import { ProfileView } from "./components/ProfileView"
+import type { ChatMessage } from "./data/mockKik"
+import { chatThreads, kikProfile } from "./data/mockKik"
+import {
+  defaultDeviceId,
+  getDevicePreset,
+  type DeviceId,
+} from "./data/devicePresets"
+import { useContactSettings } from "./hooks/useContactSettings"
+import { useIncomingSms, type IncomingSmsMessage } from "./hooks/useIncomingSms"
+import { applyContactOverrides, applyProfileOverride } from "./lib/applyOverrides"
+import { mergeOutgoingIntoThreads } from "./lib/outgoingMessages"
+import { getThreadFromList, LAUREN_ROBERSON_THREAD_ID, mergeThreads } from "./lib/smsThreads"
 
-type Message = {
-  id: string
-  from: string
-  to: string
-  text: string
-  direction: string
-  receivedAt: string
-  rawBody: Record<string, unknown>
-}
+type View = "list" | "chat" | "profile" | "edit-profile" | "edit-contact" | "dev"
 
 export default function Home() {
-  const [messages, setMessages] = useState<Message[]>([])
-  const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [sendTo, setSendTo] = useState("")
-  const [sendText, setSendText] = useState("")
-  const [sendStatus, setSendStatus] = useState<string | null>(null)
-  const [isSending, setIsSending] = useState(false)
+  const [deviceId, setDeviceId] = useState<DeviceId>(defaultDeviceId)
+  const [view, setView] = useState<View>("list")
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null)
+  const [outgoingByThread, setOutgoingByThread] = useState<Record<string, ChatMessage[]>>({})
+  const [personalNumber, setPersonalNumber] = useState<string | null>(null)
+  const prevSmsCount = useRef(0)
 
-  const loadMessages = async () => {
-    setIsLoading(true)
-    setError(null)
+  const { settings, saveProfile, saveContact, clearProfileAvatar, clearContactAvatar } =
+    useContactSettings()
 
-    try {
-      const res = await fetch("/incomingSms", { cache: "no-store" })
-      if (!res.ok) {
-        throw new Error(`Failed to load messages: ${res.status}`)
+  const device = getDevicePreset(deviceId)
+  const isSplitLayout = device.layout === "split"
+
+  const profile = useMemo(
+    () => applyProfileOverride(kikProfile, settings.profile),
+    [settings.profile],
+  )
+
+  const handleSmsUpdate = useCallback(
+    (smsMessages: IncomingSmsMessage[]) => {
+      if (smsMessages.length <= prevSmsCount.current) return
+
+      prevSmsCount.current = smsMessages.length
+      setActiveThreadId(LAUREN_ROBERSON_THREAD_ID)
+
+      if (!isSplitLayout) {
+        setView((currentView) => (currentView === "list" ? "chat" : currentView))
       }
-      const data = await res.json()
-      setMessages(data.messages ?? [])
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error")
-    } finally {
-      setIsLoading(false)
+    },
+    [isSplitLayout],
+  )
+
+  const { messages: smsMessages } = useIncomingSms(handleSmsUpdate)
+
+  useEffect(() => {
+    const loadConfig = async () => {
+      try {
+        const res = await fetch("/api/config", { cache: "no-store" })
+        if (!res.ok) return
+        const data = await res.json()
+        setPersonalNumber(data.personalNumber ?? null)
+      } catch {
+        setPersonalNumber(null)
+      }
+    }
+    void loadConfig()
+  }, [])
+
+  const threads = useMemo(() => {
+    const base = mergeThreads(chatThreads, smsMessages)
+    const withContacts = applyContactOverrides(base, settings.contacts)
+    return mergeOutgoingIntoThreads(withContacts, outgoingByThread)
+  }, [smsMessages, settings.contacts, outgoingByThread])
+
+  const resolvedThreadId = useMemo(() => {
+    if (activeThreadId && getThreadFromList(threads, activeThreadId)) {
+      return activeThreadId
+    }
+    if (isSplitLayout && threads.length > 0) {
+      return threads[0].id
+    }
+    return activeThreadId
+  }, [activeThreadId, isSplitLayout, threads])
+
+  const activeThread = getThreadFromList(threads, resolvedThreadId)
+
+  const handleDeviceChange = (nextDeviceId: DeviceId) => {
+    setDeviceId(nextDeviceId)
+    const nextDevice = getDevicePreset(nextDeviceId)
+    if (nextDevice.layout === "split") {
+      setActiveThreadId((current) => current ?? LAUREN_ROBERSON_THREAD_ID)
+      setView("list")
     }
   }
 
-  useEffect(() => {
-    loadMessages()
-  }, [])
+  const openChat = (threadId: string) => {
+    setActiveThreadId(threadId)
+    setView(isSplitLayout ? "list" : "chat")
+  }
 
-  const handleSend = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    setSendStatus(null)
-    setIsSending(true)
+  const openEditContact = () => {
+    if (!activeThread) return
+    setView("edit-contact")
+  }
 
-    if (!sendTo || !sendText) {
-      setSendStatus("Please enter both recipient and message.")
-      setIsSending(false)
-      return
-    }
+  const closeEditContact = () => {
+    setView(isSplitLayout ? "list" : "chat")
+  }
 
-    try {
+  const handleSendMessage = useCallback(
+    async (text: string): Promise<{ ok: boolean; error?: string }> => {
+      if (!personalNumber) {
+        return {
+          ok: false,
+          error:
+            "No personal number configured. Add PERSONAL_NUMBER to .env or text your FreeClimb number once so we can detect your phone.",
+        }
+      }
+
       const res = await fetch("/api/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to: sendTo, text: sendText }),
+        body: JSON.stringify({ to: personalNumber, text }),
       })
 
       const data = await res.json()
 
       if (!res.ok) {
-        throw new Error(data?.error || `Send failed: ${res.status}`)
+        return { ok: false, error: data?.error || data?.hint || "Failed to send SMS." }
       }
 
-      setSendStatus("Message sent successfully.")
-      setSendText("")
-      setSendTo("")
-    } catch (err) {
-      setSendStatus(err instanceof Error ? err.message : "Unknown error")
-    } finally {
-      setIsSending(false)
+      const outgoing: ChatMessage = {
+        id: `out-${Date.now()}`,
+        direction: "outgoing",
+        text,
+        time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+      }
+
+      setOutgoingByThread((current) => ({
+        ...current,
+        [LAUREN_ROBERSON_THREAD_ID]: [
+          ...(current[LAUREN_ROBERSON_THREAD_ID] ?? []),
+          outgoing,
+        ],
+      }))
+
+      return { ok: true }
+    },
+    [personalNumber],
+  )
+
+  const renderChatView = (showBack: boolean, onBack: () => void) => {
+    if (!activeThread) return null
+
+    const canSend = activeThread.id === LAUREN_ROBERSON_THREAD_ID
+
+    return (
+      <ChatView
+        thread={activeThread}
+        onBack={onBack}
+        onEditContact={openEditContact}
+        onSendMessage={canSend ? handleSendMessage : undefined}
+        showBack={showBack}
+      />
+    )
+  }
+
+  const renderContactEdit = () => {
+    if (!activeThread) return null
+
+    return (
+      <ContactEditView
+        thread={activeThread}
+        onBack={closeEditContact}
+        onSave={(displayName, avatarUrl) =>
+          saveContact(activeThread.id, displayName, avatarUrl)
+        }
+        onAvatarClear={() => clearContactAvatar(activeThread.id)}
+      />
+    )
+  }
+
+  const renderKikContent = () => {
+    if (view === "edit-profile") {
+      return (
+        <EditProfileView
+          profile={profile}
+          onBack={() => setView("profile")}
+          onSave={(displayName, avatarUrl) => saveProfile(displayName, avatarUrl)}
+          onAvatarClear={clearProfileAvatar}
+        />
+      )
     }
+
+    if (view === "profile") {
+      return (
+        <ProfileView
+          profile={profile}
+          onBack={() => setView("list")}
+          onEditProfile={() => setView("edit-profile")}
+          onDevToolsClick={() => setView("dev")}
+        />
+      )
+    }
+
+    if (view === "dev") {
+      return <DevPanel onBack={() => setView("profile")} />
+    }
+
+    if (isSplitLayout) {
+      return (
+        <div className="flex min-h-0 flex-1">
+          <ChatListPanel
+            threads={threads}
+            activeThreadId={resolvedThreadId}
+            onSelectThread={openChat}
+            onSettingsClick={() => setView("profile")}
+            fullWidth={false}
+          />
+          {view === "edit-contact" ? (
+            renderContactEdit() ?? <EmptyChatPlaceholder />
+          ) : activeThread ? (
+            renderChatView(false, () => setActiveThreadId(null))
+          ) : (
+            <EmptyChatPlaceholder />
+          )}
+        </div>
+      )
+    }
+
+    if (view === "edit-contact") {
+      return renderContactEdit()
+    }
+
+    if (view === "chat" && activeThread) {
+      return renderChatView(true, () => setView("list"))
+    }
+
+    return (
+      <ChatListPanel
+        threads={threads}
+        activeThreadId={resolvedThreadId}
+        onSelectThread={openChat}
+        onSettingsClick={() => setView("profile")}
+      />
+    )
   }
 
   return (
-    <div className="min-h-screen bg-zinc-100 text-zinc-950">
-      <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-6 px-6 py-10">
-        <section className="rounded-3xl bg-white p-8 shadow-lg shadow-zinc-200/60">
-          <h1 className="text-3xl font-semibold">FreeClimb SMS Viewer</h1>
-          <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-600">
-            Incoming messages will appear here after they arrive at <code className="rounded bg-zinc-100 px-1.5 py-0.5">/incomingSms</code>.
-            Use the refresh button to reload messages.
-          </p>
-          <div className="mt-6 flex flex-wrap gap-3">
-            <button
-              onClick={loadMessages}
-              className="rounded-full bg-slate-950 px-5 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
-            >
-              Refresh messages
-            </button>
-            <div className="rounded-full border border-zinc-300 px-4 py-2 text-sm text-zinc-700">
-              {messages.length} message{messages.length === 1 ? "" : "s"}
-            </div>
-          </div>
-          {isLoading && <p className="mt-4 text-sm text-slate-600">Loading messages…</p>}
-          {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
-        </section>
-
-        <section className="rounded-3xl bg-white p-8 shadow-lg shadow-zinc-200/60">
-          <h2 className="text-2xl font-semibold">Send a message</h2>
-          <p className="mt-2 text-sm leading-6 text-zinc-600">
-            Send an SMS from your FreeClimb number to a recipient number.
-          </p>
-          <form onSubmit={handleSend} className="mt-6 space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700">To</label>
-              <input
-                value={sendTo}
-                onChange={(event) => setSendTo(event.target.value)}
-                placeholder="+1708xxxxxxx"
-                className="mt-2 w-full rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-900"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700">Message</label>
-              <textarea
-                value={sendText}
-                onChange={(event) => setSendText(event.target.value)}
-                rows={4}
-                placeholder="Hi! This is a test message."
-                className="mt-2 w-full rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-900"
-              />
-            </div>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <button
-                type="submit"
-                disabled={isSending}
-                className="inline-flex items-center justify-center rounded-full bg-slate-950 px-6 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isSending ? "Sending…" : "Send SMS"}
-              </button>
-              {sendStatus && (
-                <p className="text-sm text-slate-600">{sendStatus}</p>
-              )}
-            </div>
-          </form>
-        </section>
-
-        <section className="space-y-4">
-          {messages.length === 0 && !isLoading ? (
-            <div className="rounded-3xl border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-500">
-              No messages yet. Send an SMS to your FreeClimb number or POST to <code className="rounded bg-zinc-100 px-1.5 py-0.5">/incomingSms</code>.
-            </div>
-          ) : (
-            messages.map((message) => (
-              <article key={message.id} className="rounded-3xl bg-white p-6 shadow-sm shadow-zinc-200/50">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Incoming SMS</p>
-                    <p className="mt-2 text-base font-semibold text-slate-950">{message.text || "(empty message)"}</p>
-                  </div>
-                  <div className="space-y-1 text-right text-sm text-slate-500">
-                    <p>{new Date(message.receivedAt).toLocaleString()}</p>
-                    <p>{message.direction}</p>
-                  </div>
-                </div>
-                <div className="mt-5 grid gap-4 sm:grid-cols-2">
-                  <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-slate-500">From</p>
-                    <p className="mt-1 text-sm text-slate-900">{message.from || "Unknown"}</p>
-                  </div>
-                  <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-slate-500">To</p>
-                    <p className="mt-1 text-sm text-slate-900">{message.to || "Unknown"}</p>
-                  </div>
-                </div>
-                <details className="mt-5 rounded-2xl border border-zinc-200 bg-zinc-50 p-4 [&_summary::-webkit-details-marker]:hidden">
-                  <summary className="cursor-pointer text-sm font-medium text-slate-700">Raw webhook payload</summary>
-                  <pre className="mt-3 max-h-72 overflow-auto text-xs text-slate-800">{JSON.stringify(message.rawBody, null, 2)}</pre>
-                </details>
-              </article>
-            ))
-          )}
-        </section>
-      </main>
-    </div>
+    <DeviceFrame device={device} deviceId={deviceId} onDeviceChange={handleDeviceChange}>
+      <PhoneShell layout={device.layout} listWidth={device.listWidth}>
+        {renderKikContent()}
+      </PhoneShell>
+    </DeviceFrame>
   )
 }
