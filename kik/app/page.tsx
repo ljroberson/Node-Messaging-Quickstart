@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useMemo, useRef, useState } from "react"
 import { ChatListPanel } from "./components/ChatListPanel"
 import { ChatView } from "./components/ChatView"
 import { ContactEditView } from "./components/ContactEditView"
@@ -21,7 +21,7 @@ import { useContactSettings } from "./hooks/useContactSettings"
 import { useIncomingSms, type IncomingSmsMessage } from "./hooks/useIncomingSms"
 import { applyContactOverrides, applyProfileOverride } from "./lib/applyOverrides"
 import { mergeOutgoingIntoThreads } from "./lib/outgoingMessages"
-import { getThreadFromList, LAUREN_ROBERSON_THREAD_ID, mergeThreads } from "./lib/smsThreads"
+import { getThreadFromList, getThreadIdForSender, LAUREN_ROBERSON_THREAD_ID, mergeThreads } from "./lib/smsThreads"
 
 type View = "list" | "chat" | "profile" | "edit-profile" | "edit-contact" | "dev"
 
@@ -30,7 +30,6 @@ export default function Home() {
   const [view, setView] = useState<View>("list")
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null)
   const [outgoingByThread, setOutgoingByThread] = useState<Record<string, ChatMessage[]>>({})
-  const [personalNumber, setPersonalNumber] = useState<string | null>(null)
   const prevSmsCount = useRef(0)
 
   const { settings, saveProfile, saveContact, clearProfileAvatar, clearContactAvatar } =
@@ -45,11 +44,15 @@ export default function Home() {
   )
 
   const handleSmsUpdate = useCallback(
-    (smsMessages: IncomingSmsMessage[]) => {
+    (smsMessages: IncomingSmsMessage[], personalNumber: string | null) => {
       if (smsMessages.length <= prevSmsCount.current) return
 
       prevSmsCount.current = smsMessages.length
-      setActiveThreadId(LAUREN_ROBERSON_THREAD_ID)
+      const latest = smsMessages[0]
+      if (!latest) return
+
+      const threadId = getThreadIdForSender(latest.from, personalNumber)
+      setActiveThreadId(threadId)
 
       if (!isSplitLayout) {
         setView((currentView) => (currentView === "list" ? "chat" : currentView))
@@ -58,27 +61,13 @@ export default function Home() {
     [isSplitLayout],
   )
 
-  const { messages: smsMessages } = useIncomingSms(handleSmsUpdate)
-
-  useEffect(() => {
-    const loadConfig = async () => {
-      try {
-        const res = await fetch("/api/config", { cache: "no-store" })
-        if (!res.ok) return
-        const data = await res.json()
-        setPersonalNumber(data.personalNumber ?? null)
-      } catch {
-        setPersonalNumber(null)
-      }
-    }
-    void loadConfig()
-  }, [])
+  const { messages: smsMessages, personalNumber } = useIncomingSms(handleSmsUpdate)
 
   const threads = useMemo(() => {
-    const base = mergeThreads(chatThreads, smsMessages)
+    const base = mergeThreads(chatThreads, smsMessages, personalNumber)
     const withContacts = applyContactOverrides(base, settings.contacts)
     return mergeOutgoingIntoThreads(withContacts, outgoingByThread)
-  }, [smsMessages, settings.contacts, outgoingByThread])
+  }, [smsMessages, personalNumber, settings.contacts, outgoingByThread])
 
   const resolvedThreadId = useMemo(() => {
     if (activeThreadId && getThreadFromList(threads, activeThreadId)) {
@@ -137,11 +126,13 @@ export default function Home() {
         return { ok: false, error: data?.error || data?.hint || "Failed to send SMS." }
       }
 
+      const sentAt = new Date().toISOString()
       const outgoing: ChatMessage = {
         id: `out-${Date.now()}`,
         direction: "outgoing",
         text,
-        time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+        time: new Date(sentAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+        sentAt,
       }
 
       setOutgoingByThread((current) => ({

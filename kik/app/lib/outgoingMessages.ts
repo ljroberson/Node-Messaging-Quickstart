@@ -1,16 +1,25 @@
 import type { ChatMessage, ChatThread } from "../data/mockKik"
+import { formatRelativeTime } from "./smsThreads"
 
-export function appendOutgoingMessage(thread: ChatThread, message: ChatMessage): ChatThread {
-  const messages = [...thread.messages, message]
-  const last = messages[messages.length - 1]
-
-  return {
-    ...thread,
-    messages,
-    lastPreview: last.text,
-    timestamp: "now",
-    status: "D",
+function getMessageSortTime(message: ChatMessage): number {
+  if (message.sentAt) {
+    return new Date(message.sentAt).getTime()
   }
+
+  const outboundMatch = message.id.match(/^out-(\d+)$/)
+  if (outboundMatch) {
+    return Number(outboundMatch[1])
+  }
+
+  return 0
+}
+
+function sortMessages(messages: ChatMessage[]): ChatMessage[] {
+  return [...messages].sort((a, b) => {
+    const diff = getMessageSortTime(a) - getMessageSortTime(b)
+    if (diff !== 0) return diff
+    return a.id.localeCompare(b.id)
+  })
 }
 
 export function mergeOutgoingIntoThreads(
@@ -21,6 +30,15 @@ export function mergeOutgoingIntoThreads(
     const outgoing = outgoingByThread[thread.id] ?? []
     if (outgoing.length === 0) return thread
 
-    return outgoing.reduce((current, message) => appendOutgoingMessage(current, message), thread)
+    const messages = sortMessages([...thread.messages, ...outgoing])
+    const last = messages[messages.length - 1]
+
+    return {
+      ...thread,
+      messages,
+      lastPreview: last.text,
+      timestamp: last.sentAt ? formatRelativeTime(last.sentAt) : "now",
+      status: "D",
+    }
   })
 }

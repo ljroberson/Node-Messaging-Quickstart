@@ -14,8 +14,11 @@ export type IncomingSmsMessage = {
 
 const POLL_INTERVAL_MS = 3000
 
-export function useIncomingSms(onMessagesUpdated?: (messages: IncomingSmsMessage[]) => void) {
+export function useIncomingSms(
+  onMessagesUpdated?: (messages: IncomingSmsMessage[], personalNumber: string | null) => void,
+) {
   const [messages, setMessages] = useState<IncomingSmsMessage[]>([])
+  const [personalNumber, setPersonalNumber] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const onMessagesUpdatedRef = useRef(onMessagesUpdated)
 
@@ -31,8 +34,10 @@ export function useIncomingSms(onMessagesUpdated?: (messages: IncomingSmsMessage
       }
       const data = await res.json()
       const nextMessages = data.messages ?? []
+      const nextPersonalNumber = data.personalNumber ?? null
       setMessages(nextMessages)
-      onMessagesUpdatedRef.current?.(nextMessages)
+      setPersonalNumber(nextPersonalNumber)
+      onMessagesUpdatedRef.current?.(nextMessages, nextPersonalNumber)
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error")
@@ -54,5 +59,5 @@ export function useIncomingSms(onMessagesUpdated?: (messages: IncomingSmsMessage
     }
   }, [loadMessages])
 
-  return { messages, error, reload: loadMessages }
+  return { messages, personalNumber, error, reload: loadMessages }
 }

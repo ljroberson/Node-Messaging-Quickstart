@@ -26,7 +26,12 @@ export function DevPanel({ onBack }: DevPanelProps) {
   const [sendHint, setSendHint] = useState<string | null>(null)
   const [sendConfig, setSendConfig] = useState<string | null>(null)
   const [configuredNumber, setConfiguredNumber] = useState<string | null>(null)
+  const [personalNumber, setPersonalNumber] = useState<string | null>(null)
   const [isSending, setIsSending] = useState(false)
+  const [simulateFrom, setSimulateFrom] = useState("+15551234567")
+  const [simulateText, setSimulateText] = useState("")
+  const [simulateStatus, setSimulateStatus] = useState<string | null>(null)
+  const [isSimulating, setIsSimulating] = useState(false)
 
   const loadSendConfig = async () => {
     try {
@@ -62,6 +67,7 @@ export function DevPanel({ onBack }: DevPanelProps) {
       const data = await res.json()
       setMessages(data.messages ?? [])
       setConfiguredNumber(data.configuredFreeclimbNumber ?? null)
+      setPersonalNumber(data.personalNumber ?? null)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error")
     } finally {
@@ -114,6 +120,47 @@ export function DevPanel({ onBack }: DevPanelProps) {
     }
   }
 
+  const handleSimulateInbound = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setSimulateStatus(null)
+    setIsSimulating(true)
+
+    if (!simulateFrom.trim() || !simulateText.trim()) {
+      setSimulateStatus("Enter both a sender number and message text.")
+      setIsSimulating(false)
+      return
+    }
+
+    try {
+      const res = await fetch("/incomingSms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          from: simulateFrom.trim(),
+          to: configuredNumber ?? undefined,
+          text: simulateText.trim(),
+          direction: "inbound",
+          requestType: "messageDelivery",
+          status: "received",
+        }),
+      })
+
+      const data = await res.json()
+
+      if (!res.ok) {
+        throw new Error(data?.error || `Simulate failed: ${res.status}`)
+      }
+
+      setSimulateStatus("Simulated inbound SMS saved. Check the chat list for a new thread.")
+      setSimulateText("")
+      await loadMessages()
+    } catch (err) {
+      setSimulateStatus(err instanceof Error ? err.message : "Unknown error")
+    } finally {
+      setIsSimulating(false)
+    }
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-zinc-100">
       <header className="sticky top-0 z-10 flex items-center border-b border-zinc-200 bg-white px-2 py-3">
@@ -163,6 +210,53 @@ export function DevPanel({ onBack }: DevPanelProps) {
               number that is configured in the dashboard.
             </p>
           )}
+          <p className="mt-3 text-sm text-amber-800">
+            <strong>Trial account note:</strong> FreeClimb only delivers inbound SMS from your
+            verified number
+            {personalNumber ? ` (${personalNumber})` : ""}. Texts from other real phones will not
+            reach this app until you upgrade your account. Use &quot;Simulate inbound SMS&quot;
+            below to test fake threads locally.
+          </p>
+        </section>
+
+        <section className="rounded-2xl bg-white p-5 shadow-sm">
+          <h2 className="text-lg font-semibold">Simulate inbound SMS</h2>
+          <p className="mt-2 text-sm leading-6 text-zinc-600">
+            Inject a fake inbound webhook to test unknown-sender threads without a second phone.
+            Messages from your personal number open Lauren Roberson; any other{" "}
+            <strong>From</strong> number creates a new fake contact thread.
+          </p>
+          <form onSubmit={handleSimulateInbound} className="mt-4 space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700">From</label>
+              <input
+                value={simulateFrom}
+                onChange={(event) => setSimulateFrom(event.target.value)}
+                placeholder="+15551234567"
+                className="mt-2 w-full rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-900"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700">Message</label>
+              <textarea
+                value={simulateText}
+                onChange={(event) => setSimulateText(event.target.value)}
+                rows={3}
+                placeholder="Hey, is this Lauren?"
+                className="mt-2 w-full rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-900"
+              />
+            </div>
+            <div className="flex flex-col gap-3">
+              <button
+                type="submit"
+                disabled={isSimulating}
+                className="inline-flex items-center justify-center rounded-full bg-slate-950 px-6 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isSimulating ? "Saving…" : "Simulate inbound SMS"}
+              </button>
+              {simulateStatus && <p className="text-sm text-slate-600">{simulateStatus}</p>}
+            </div>
+          </form>
         </section>
 
         <section className="rounded-2xl bg-white p-5 shadow-sm">

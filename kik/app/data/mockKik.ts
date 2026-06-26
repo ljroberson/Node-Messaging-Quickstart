@@ -5,6 +5,8 @@ export type ChatMessage = {
   direction: "incoming" | "outgoing"
   text: string
   time: string
+  /** ISO timestamp used to interleave inbound and outbound messages. */
+  sentAt?: string
 }
 
 export type ChatThread = {

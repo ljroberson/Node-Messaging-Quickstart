@@ -5,6 +5,7 @@ import {
   loadIncomingMessages,
   type StoredIncomingMessage,
 } from "../lib/incomingSmsStore"
+import { getPersonalNumber } from "../lib/personalNumber"
 
 export const dynamic = "force-dynamic"
 
@@ -71,9 +72,12 @@ export async function POST(request: Request) {
 export async function GET() {
   const messages = loadIncomingMessages()
   const configured = getFreeClimbConfig()
+  const personal = getPersonalNumber()
 
   return NextResponse.json({
     messages,
     configuredFreeclimbNumber: configured?.fromNumber ?? null,
+    personalNumber: personal.number,
+    personalNumberSource: personal.source,
   })
 }
